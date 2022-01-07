@@ -19,6 +19,9 @@ param scaleUnits int = 2
 @description('Runbook public Uri')
 param runbookuri string = 'https://raw.githubusercontent.com/EverAzureRest/bastion-autoscale/main/scale-bastioninstance.ps1'
 
+@description('role definition ID for the automation account managed identity')
+param roledefinitionId string = '4d97b98b-1d4f-4787-a291-c67834d212e7'
+
 var location = '${resourceGroup().location}'
 var publicIPName = '${bastionName}-pip'
 var workspaceName = '${toLower(uniqueString(resourceGroup().id))}-workspace'
@@ -107,6 +110,12 @@ resource automationAccount 'Microsoft.Automation/automationAccounts@2021-06-22' 
   identity: {
     type: 'SystemAssigned'
   }
+  properties: {
+    disableLocalAuth: true
+    sku: {
+      name: 'Basic'
+    }
+  }
 }
 
 resource runbook 'Microsoft.Automation/automationAccounts/runbooks@2019-06-01' = {
@@ -126,6 +135,7 @@ resource webHook 'Microsoft.Automation/automationAccounts/webhooks@2015-10-31' =
   name: 'autoscaleWebhook'
   parent: automationAccount
   properties: {
+    expiryTime: '12/31/2022'
     isEnabled: true
     runbook: {
       name: runbook.name
@@ -134,18 +144,18 @@ resource webHook 'Microsoft.Automation/automationAccounts/webhooks@2015-10-31' =
 }
 
 //Assign Managed Identity for Automation Account to the Netework Contributor role - a more scoped custom role may be desirable
-resource automationAccountRoleAssingment 'Microsoft.Authorization/roleAssignments@2020-10-01-preview' = {
-  name: 'AzureAutomationRoleAssigment'
-  scope: bastion
+resource automationAccountRoleAssingment 'Microsoft.Authorization/roleAssignments@2021-04-01-preview' = {
+  name: guid(automationAccount.id, resourceGroup().id, roledefinitionId)
+  scope: resourceGroup()
   properties: {
-    principalId: '${automationAccount.identity.principalId}'
-    roleDefinitionId: '4d97b98b-1d4f-4787-a291-c67834d212e7'
+    principalId: automationAccount.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roledefinitionId)
   }
 }
 
 resource sessionAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: 'bastionsess'
-  location: location
+  location: 'global'
   properties: {
     evaluationFrequency: 'PT5M'
     windowSize: 'PT30M'
@@ -179,18 +189,20 @@ resource sessionAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
 
 resource actionGroup 'Microsoft.Insights/actionGroups@2021-09-01' = {
   name: 'bastionAutoScale'
-  location: location
+  location: 'global'
   properties: {
     automationRunbookReceivers: [
       {
         automationAccountId: automationAccount.id
-        isGlobalRunbook: true
+        isGlobalRunbook: false
         name: webHook.name
         runbookName: runbook.name
         webhookResourceId: webHook.id
+        serviceUri: webHook.properties.uri
+        useCommonAlertSchema: false
       }
     ]
     enabled: true
-    groupShortName: 'bastionSessions'
+    groupShortName: 'bastion'
   }
 }
