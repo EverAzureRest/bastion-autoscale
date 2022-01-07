@@ -1,0 +1,1 @@
+##Azure Runbook to scale Bastion
